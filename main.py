@@ -1,28 +1,13 @@
-import tkinter as tk
-from tkinter import Label
 import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-from PIL import Image, ImageTk
 import time
+import numpy as np
 from utils import *
+from load_images import *
 
 # Wczytaj obraz serca z kanałem alpha (RGBA)
-heart_img = cv2.imread("./heart.png", cv2.IMREAD_UNCHANGED)
-def draw_heart(img, heart_img, x, y, size=(50, 50)):
-    """
-    Rysuje obrazek `heart_img` w pozycji (x, y) na tle `img` jako zwykły BGR.
-    """
-    heart_resized = cv2.resize(heart_img, size)
-
-    h, w, _ = heart_resized.shape
-
-    # Sprawdź, czy mieści się na tle
-    if x < 0 or y < 0 or x + w > img.shape[1] or y + h > img.shape[0]:
-        return
-
-    img[y:y+h, x:x+w] = heart_resized
 
 BaseOptions = mp.tasks.BaseOptions
 PoseLandmarker = mp.tasks.vision.PoseLandmarker
@@ -30,7 +15,7 @@ PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
 PoseLandmarkerResult = mp.tasks.vision.PoseLandmarkerResult
 VisionRunningMode = mp.tasks.vision.RunningMode
 
-target = BodyParts.randomPart()
+
 latest_result = None
 
 # Callback do landmarker-a
@@ -47,52 +32,62 @@ options = PoseLandmarkerOptions(
 
 # Inicjalizacja kamery i GUI
 cap = cv2.VideoCapture(0)
-root = tk.Tk()
-root.title("Med")
-label = Label(root)
-label.pack()
 
 # Utwórz landmarker
 landmarker = PoseLandmarker.create_from_options(options)
 
-
 # Główna pętla aktualizująca obraz
-def update_frame():
+def run():
     global latest_result
 
-    ret, frame = cap.read()
-    if not ret:
-        root.after(10, update_frame)
-        return
+    #wylosowanie pierwszej czesci ciala
+    target = BodyParts.randomPart()
 
-    frame = cv2.flip(frame, 1)
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    while True:
+        ret, frame = cap.read()
+        key = cv2.waitKey(1)
 
-    timestamp_ms = int(time.time() * 1000)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-    landmarker.detect_async(mp_image, timestamp_ms)
+        if not ret:
+            continue
+        if key == ord('q'):
+            break
+        elif key == ord(' '):
+            target = BodyParts.randomPart()
+        # detekcja czesci ciala i utworzenie maski (kopia klatki z dodanym 4 kanalem obecnie wypelnionym zerami)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        timestamp_ms = int(time.time() * 1000)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        landmarker.detect_async(mp_image, timestamp_ms)
+        mask_rgba = np.zeros((frame.shape[0], frame.shape[1], 4), dtype=np.uint8)
 
-    if latest_result and latest_result.pose_landmarks:
-        h, w, _ = frame.shape
-        for idx, lm in enumerate(latest_result.pose_landmarks[0]):
-            cx, cy = int(lm.x * w), int(lm.y * h)
-            if idx in target:
-                cv2.circle(frame, (cx, cy), 6, (0, 0, 255), -1)
+        if latest_result and latest_result.pose_landmarks:
+            h, w, _ = frame.shape
+            # rysowanie kolek w miejscach detekcji
+            for idx, lm in enumerate(latest_result.pose_landmarks[0]):
+                x, y = int(lm.x * w), int(lm.y * h)
+                if idx in target:
+                    """
+                     cv2.circle(mask_rgba, (x, y), 8, (0, 255, 0, 255))
+                     mask_rgba - maska wejsciowa
+                     (x,y) - polozenie kropki
+                     8 - wielkosc kropki
+                     (0,255,0,255) - pierwsze 3 to kolor w formacie BGR, ostatnia widoczosc 0 brak, 255 max
+                    """
+                    cv2.circle(mask_rgba, (x, y), 8, (0, 255, 0, 255), -1)
 
-        # Wyznacz pozycję serca
-        coords = BodyParts.getHeartCoords(latest_result.pose_landmarks[0], frame.shape)
-        if coords:
-            cx, cy = coords
-            draw_heart(frame, heart_img, cy - 25, cx - 25)
+            cx,cy = ImageUtils.getHeartCoords(latest_result.pose_landmarks[0], frame.shape)
+            ImageUtils.draw_rgba(mask_rgba, heart_img, cx, cy, size=(50, 50))
 
-    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    img = Image.fromarray(img)
-    imgtk = ImageTk.PhotoImage(image=img)
-    label.imgtk = imgtk
-    label.configure(image=imgtk)
-    root.after(10, update_frame)
-
-update_frame()
-root.mainloop()
+        # dodaje obrazki z maski do zdjecia z klatki
+        blended = ImageUtils.blend_rgba_over_bgr(frame.copy(), mask_rgba)
+        mask_rgba_bgr = cv2.cvtColor(mask_rgba, cv2.COLOR_RGBA2BGR)
+        
+        # wyswietlenie 3 widokow, oryginalu, maski i polaczonego maski z oryginalem
+        cv2.imshow("Blended", blended)       
+        cv2.imshow("frame", frame)
+        cv2.imshow("RGBA Mask", mask_rgba_bgr)
+        
+    
+run()
 cap.release()
 landmarker.close()
