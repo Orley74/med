@@ -77,11 +77,12 @@ def run():
 
             cx,cy = ImageUtils.getHeartCoords(latest_result.pose_landmarks[0], frame.shape)
             ImageUtils.draw_rgba(mask_rgba, heart_img, cx, cy, size=(50, 50))
-
+            Injures.noArm_inpaint(frame, 0, frame.shape, latest_result.pose_landmarks[0])
+            
         # dodaje obrazki z maski do zdjecia z klatki
         blended = ImageUtils.blend_rgba_over_bgr(frame.copy(), mask_rgba)
         mask_rgba_bgr = cv2.cvtColor(mask_rgba, cv2.COLOR_RGBA2BGR)
-        
+
         # wyswietlenie 3 widokow, oryginalu, maski i polaczonego maski z oryginalem
         cv2.imshow("Blended", blended)       
         cv2.imshow("frame", frame)

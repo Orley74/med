@@ -1,7 +1,8 @@
 import random
 import cv2
 import numpy as np
-
+RIGHT = 0
+LEFT = 1
 
 model_path = './pose_landmarker_lite.task'
 
@@ -78,25 +79,32 @@ class BodyParts:
         name = random.choice(list(cls.PARTS.keys()))
         return cls.PARTS[name]
     
-
-    @staticmethod
-    def _overlay_image(bg, fg, x, y):
+class Injures:
+    @classmethod
+    def noArm_inpaint(cls, frame, arm, image_shape, pose_landmarks):
         """
-        Nakłada fg (z kanałem alpha) na tło bg w punkcie (x, y).
+        Usuwa kończynę (ramię) poprzez zamaskowanie i inpainting.
         """
-        h, w = fg.shape[:2]
+        h, w = image_shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
 
-        if y + h > bg.shape[0] or x + w > bg.shape[1] or x < 0 or y < 0:
-            return
+        if arm == 0:  # prawa ręka
+            x1, y1 = int(pose_landmarks[12].x * w), int(pose_landmarks[12].y * h)
+            x2, y2 = int(pose_landmarks[14].x * w), int(pose_landmarks[14].y * h)
+            x3, y3 = int(pose_landmarks[16].x * w), int(pose_landmarks[16].y * h)
+        else:  # lewa ręka
+            x1, y1 = int(pose_landmarks[11].x * w), int(pose_landmarks[11].y * h)
+            x2, y2 = int(pose_landmarks[13].x * w), int(pose_landmarks[13].y * h)
+            x3, y3 = int(pose_landmarks[15].x * w), int(pose_landmarks[15].y * h)
 
-        alpha_fg = fg[:, :, 3] / 255.0
-        alpha_bg = 1.0 - alpha_fg
+        cv2.line(mask, (x1, y1), (x2, y2), (0, 255, 0, 255), 40)
+        cv2.line(mask, (x2, y2), (x3, y3), (0, 255, 0, 255), 40)
 
-        for c in range(3):
-            bg[y:y+h, x:x+w, c] = (alpha_fg * fg[:, :, c] +
-                                   alpha_bg * bg[y:y+h, x:x+w, c])
-               
-   
+        # Właściwe usunięcie kończyny z obrazu
+        # inpainted = cv2.inpaint(frame, mask, inpaintRadius=40, flags=cv2.INPAINT_TELEA)
+        # return inpainted
+            
+
 class ImageUtils:
 
     @classmethod
