@@ -6,6 +6,7 @@ import time
 import numpy as np
 from utils import *
 from load_images import *
+import random
 
 # Wczytaj obraz serca z kanałem alpha (RGBA)
 
@@ -42,6 +43,8 @@ def run():
 
     #wylosowanie pierwszej czesci ciala
     target = BodyParts.randomPart()
+    place = random.randint(0,3)
+    random_part = random.randint(0,4)
 
     while True:
         ret, frame = cap.read()
@@ -53,6 +56,8 @@ def run():
             break
         elif key == ord(' '):
             target = BodyParts.randomPart()
+            random_part = random.randint(0,4)
+            place = random.randint(0,3)
         # detekcja czesci ciala i utworzenie maski (kopia klatki z dodanym 4 kanalem obecnie wypelnionym zerami)
         timestamp_ms = int(time.time() * 1000)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
@@ -73,14 +78,16 @@ def run():
                      (0,255,0,255) - pierwsze 3 to kolor w formacie BGR, ostatnia widoczosc 0 brak, 255 max
                     """
                     cv2.circle(mask_rgba, (x, y), 8, (0, 255, 0, 255), -1)
-            
-            cx,cy = ImageUtils.getHeartCoords(latest_result.pose_landmarks[0], frame.shape)
-
+            try:
+                cx,cy = ImageUtils.getHeartCoords(latest_result.pose_landmarks[0], frame.shape)
+            except:
+                pass
             ImageUtils.draw_rgba(mask_rgba, heart_img, cx, cy, size=(50, 50))
-            ## laguje
-            # frame = Injures.noArm_inpaint(frame, mask_rgba, 0, frame.shape, latest_result.pose_landmarks[0])
+
+            Injures.noPart_simple(frame, mask_rgba, random_part, place, frame.shape, latest_result.pose_landmarks[0])
             
         # dodaje obrazki z maski do zdjecia z klatki
+
         blended = ImageUtils.blend_rgba_over_bgr(frame.copy(), mask_rgba)
         mask_rgba_bgr = cv2.cvtColor(mask_rgba, cv2.COLOR_RGBA2BGR)
 

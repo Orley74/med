@@ -86,6 +86,7 @@ class Injures:
     def noArm_inpaint(cls, frame, mask, arm, image_shape, pose_landmarks):
         """
         Usuwa kończynę (ramię) poprzez zamaskowanie i inpainting.
+        Strazsnie laguje, obecnie korzystamy z noPart_Simple
         """
         h, w = image_shape[:2]
 
@@ -115,6 +116,61 @@ class Injures:
         return inpainted_frame
 
                 
+    @classmethod
+    def noPart_simple(cls, frame, mask, chosen_part, place, image_shape, pose_landmarks):
+        """
+        Usuwa kończynę (ramię) poprzez zamaskowanie i inpainting.
+        0 - prawa reka
+        1 - lewa reka
+        2 - prawa noga
+        3 - lewa noga
+        4 - losowo
+
+        place - miejsce "urwania" 
+        0 - gora (przy brzuchu)
+        1 - srodek
+        2 - dol (dlon lub stopa)
+        """
+        h, w = image_shape[:2]
+        part = []
+        #zmienna na dlon albo stope
+        part_end = 0
+        belly = BodyParts.getBelly()
+        # Wybierz odpowiednie punkty dla ramienia
+        if chosen_part == 0:  # prawa ręka
+            part = BodyParts.getRightArm()
+            part_end = 20
+
+        elif chosen_part == 1:  # lewa ręka
+            part_end = 19
+            part = BodyParts.getLeftArm()
+
+        elif chosen_part == 2:
+            part_end = 32
+            part = BodyParts.getRightLeg()
+
+        elif chosen_part == 3:
+            part_end = 31
+            part = BodyParts.getLeftLeg()
+        elif chosen_part == 4:
+            part_end = 4
+            part = BodyParts.randomPart()
+        else:
+            raise Exception
+        
+        #biore wykryty punkt i dopasowuje go do indeksu czesci ciala dlatego wykryty_punkt[czesc_ciala[index]]
+        x1, y1 = int(pose_landmarks[part[0]].x * w), int(pose_landmarks[part[0]].y * h)
+        x2, y2 = int(pose_landmarks[part[1]].x * w), int(pose_landmarks[part[1]].y * h)
+        x3, y3 = int(pose_landmarks[part[2]].x * w), int(pose_landmarks[part[2]].y * h)
+        x4, y4 = int(pose_landmarks[part_end].x * w), int(pose_landmarks[part_end].y * h)
+        
+        # Rysowanie maski ramienia
+        if(place <= 0):
+            cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 255), int(0.25*w*(abs(pose_landmarks[belly[0]].x-pose_landmarks[belly[1]].x))))
+        if(place <= 1):
+            cv2.line(frame, (x2, y2), (x3, y3), (0, 0, 255), int(0.20*w*(abs(pose_landmarks[belly[0]].x-pose_landmarks[belly[1]].x))))
+        if(place <= 2):
+            cv2.line(frame, (x3, y3), (x4, y4), (0, 0, 255), int(0.15*w*(abs(pose_landmarks[belly[0]].x-pose_landmarks[belly[1]].x))))
 
 class ImageUtils:
 
