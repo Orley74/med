@@ -80,14 +80,16 @@ class BodyParts:
         return cls.PARTS[name]
     
 class Injures:
+    
+
     @classmethod
-    def noArm_inpaint(cls, frame, arm, image_shape, pose_landmarks):
+    def noArm_inpaint(cls, frame, mask, arm, image_shape, pose_landmarks):
         """
         Usuwa kończynę (ramię) poprzez zamaskowanie i inpainting.
         """
         h, w = image_shape[:2]
-        mask = np.zeros((h, w), dtype=np.uint8)
 
+        # Wybierz odpowiednie punkty dla ramienia
         if arm == 0:  # prawa ręka
             x1, y1 = int(pose_landmarks[12].x * w), int(pose_landmarks[12].y * h)
             x2, y2 = int(pose_landmarks[14].x * w), int(pose_landmarks[14].y * h)
@@ -97,13 +99,22 @@ class Injures:
             x2, y2 = int(pose_landmarks[13].x * w), int(pose_landmarks[13].y * h)
             x3, y3 = int(pose_landmarks[15].x * w), int(pose_landmarks[15].y * h)
 
-        cv2.line(mask, (x1, y1), (x2, y2), (0, 255, 0, 255), 40)
-        cv2.line(mask, (x2, y2), (x3, y3), (0, 255, 0, 255), 40)
+        # Rysowanie maski ramienia
+        cv2.line(mask, (x1, y1), (x2, y2), 255, 40)
+        cv2.line(mask, (x2, y2), (x3, y3), 255, 40)
 
-        # Właściwe usunięcie kończyny z obrazu
-        # inpainted = cv2.inpaint(frame, mask, inpaintRadius=40, flags=cv2.INPAINT_TELEA)
-        # return inpainted
-            
+        # Upewnij się, że maska jest w odcieniach szarości (jednokanałowa)
+        if len(mask.shape) == 3:
+            mask_gray = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+        else:
+            mask_gray = mask
+
+        # Inpainting - symulacja zniknięcia przedmiotu
+        inpainted_frame = cv2.inpaint(frame, mask_gray, inpaintRadius=15, flags=cv2.INPAINT_TELEA)
+
+        return inpainted_frame
+
+                
 
 class ImageUtils:
 

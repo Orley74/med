@@ -54,9 +54,8 @@ def run():
         elif key == ord(' '):
             target = BodyParts.randomPart()
         # detekcja czesci ciala i utworzenie maski (kopia klatki z dodanym 4 kanalem obecnie wypelnionym zerami)
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         timestamp_ms = int(time.time() * 1000)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         landmarker.detect_async(mp_image, timestamp_ms)
         mask_rgba = np.zeros((frame.shape[0], frame.shape[1], 4), dtype=np.uint8)
 
@@ -74,10 +73,12 @@ def run():
                      (0,255,0,255) - pierwsze 3 to kolor w formacie BGR, ostatnia widoczosc 0 brak, 255 max
                     """
                     cv2.circle(mask_rgba, (x, y), 8, (0, 255, 0, 255), -1)
-
+            
             cx,cy = ImageUtils.getHeartCoords(latest_result.pose_landmarks[0], frame.shape)
+
             ImageUtils.draw_rgba(mask_rgba, heart_img, cx, cy, size=(50, 50))
-            Injures.noArm_inpaint(frame, 0, frame.shape, latest_result.pose_landmarks[0])
+            ## laguje
+            # frame = Injures.noArm_inpaint(frame, mask_rgba, 0, frame.shape, latest_result.pose_landmarks[0])
             
         # dodaje obrazki z maski do zdjecia z klatki
         blended = ImageUtils.blend_rgba_over_bgr(frame.copy(), mask_rgba)
