@@ -165,14 +165,16 @@ class Injures:
         x4, y4 = int(pose_landmarks[part_end].x * w), int(pose_landmarks[part_end].y * h)
         
         # Rysowanie maski ramienia
+        size = w*(abs(pose_landmarks[belly[0]].x-pose_landmarks[belly[1]].x))
         if(place <= 0):
-            cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 255), int(0.25*w*(abs(pose_landmarks[belly[0]].x-pose_landmarks[belly[1]].x))))
+            cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 255), int(0.25 * size))
         if(place <= 1):
-            cv2.line(frame, (x2, y2), (x3, y3), (0, 0, 255), int(0.20*w*(abs(pose_landmarks[belly[0]].x-pose_landmarks[belly[1]].x))))
+            cv2.line(frame, (x2, y2), (x3, y3), (0, 0, 255), int(0.20 * size))
         if(place <= 2):
-            cv2.line(frame, (x3, y3), (x4, y4), (0, 0, 255), int(0.15*w*(abs(pose_landmarks[belly[0]].x-pose_landmarks[belly[1]].x))))
+            cv2.line(frame, (x3, y3), (x4, y4), (0, 0, 255), int(0.15 * size))
 
 class ImageUtils:
+    
 
     @classmethod
     def getHeartCoords(cls, pose_landmarks, image_shape):
@@ -212,19 +214,44 @@ class ImageUtils:
             hip_y = 0 
 
         # ustawiam lewa krawedz mniej więcej na środku barkow, lekko przesuwajac go w lewa strone     
-        cx = ((left_shoulder.x + (0.9 * right_shoulder.x)) / 2) * w
+        cx = int(((left_shoulder.x + (0.9 * right_shoulder.x)) / 2) * w)
         shoulder_line = ((left_shoulder.y + right_shoulder.y) / 2) 
 
         # gorna krawdedz lekko ponizej barkow
         if hip_y != 0:
-            cy = int((shoulder_line + 0.7*(shoulder_line - hip_y)) * h)
+            cy = int((hip_y+0.85*(shoulder_line - hip_y)) * h)
             
         else:
             cy = int((shoulder_line * h) + 50)
         
 
-        return int(cx), cy
-    
+        return cx, cy
+    @classmethod
+    def getHeadCoords(cls, pose_landmarks, image_shape):
+        """_summary_
+
+        Args:
+            pose_landmarks (list): wykryte czesci ciala
+            image_shape (list): wielkosc obrazu
+
+        Returns:
+            Zwraca wyliczone wspolrzedne 
+            cx - lewy dolny rog serca, cy - prawy gorny rog serca
+        """
+        h, w = image_shape[:2]
+        
+        # sprawdzam czy wykryto barki i uda
+        try:
+            middle_head = pose_landmarks[0]
+            right_head = pose_landmarks[7]
+            left_head = pose_landmarks[8]
+            shoulder = pose_landmarks[11]
+        except IndexError:
+            return None
+        helmet_x = int(((((right_head.x + left_head.x)) / 2) - (abs(right_head.x - left_head.x))) * w)
+        helmet_y = int((middle_head.y - (abs(middle_head.y - shoulder.y))) * h)
+
+        return helmet_x, helmet_y
 
     def draw_rgba(mask, img, x_position, y_position, size=(50, 50)):
         """    Rysuje obrazek z kanałem alpha (img) na masce RGBA (mask).
@@ -245,6 +272,9 @@ class ImageUtils:
             return
         
         # oddzielam kanaly rgb od alfy (alfa odpowiada za przezroczystosc)
+        # img_resized[..., :3] - ten zapis bierze pierwsze 3 elemety img
+        # (wszystkie 3 kanaly RGB to te kropki ze bierze wszystko)
+        # img_resized[..., 3] - ten bierze 4 element 
         img_rgb = img_resized[..., :3].astype(float)
         img_alpha = img_resized[..., 3].astype(float) / 255.0  
 
@@ -256,6 +286,7 @@ class ImageUtils:
         for c in range(3):
             roi[..., c] = (img_rgb[..., c] * img_alpha + roi[..., c] * roi_alpha * (1 - img_alpha)) / np.maximum(out_alpha, 1e-5)
 
+        # w razie gdyby wartosci byly wyzsze niz 255, zamieniam na wartosc maks (255)
         mask[y_position:y_position+h, x_position:x_position+w, :3] = np.clip(roi, 0, 255).astype(np.uint8)
         mask[y_position:y_position+h, x_position:x_position+w, 3] = np.clip(out_alpha * 255, 0, 255).astype(np.uint8)
 

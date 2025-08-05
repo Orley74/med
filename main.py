@@ -8,14 +8,11 @@ from utils import *
 from load_images import *
 import random
 
-# Wczytaj obraz serca z kanałem alpha (RGBA)
-
 BaseOptions = mp.tasks.BaseOptions
 PoseLandmarker = mp.tasks.vision.PoseLandmarker
 PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
 PoseLandmarkerResult = mp.tasks.vision.PoseLandmarkerResult
 VisionRunningMode = mp.tasks.vision.RunningMode
-
 
 latest_result = None
 
@@ -45,7 +42,7 @@ def run():
     target = BodyParts.randomPart()
     place = random.randint(0,3)
     random_part = random.randint(0,4)
-
+    cx_head,cy_head = 0,0
     while True:
         ret, frame = cap.read()
         key = cv2.waitKey(1)
@@ -80,9 +77,14 @@ def run():
                     cv2.circle(mask_rgba, (x, y), 8, (0, 255, 0, 255), -1)
             try:
                 cx,cy = ImageUtils.getHeartCoords(latest_result.pose_landmarks[0], frame.shape)
-            except:
-                pass
+                cx_head,cy_head = ImageUtils.getHeadCoords(latest_result.pose_landmarks[0], frame.shape)
+
+            except Exception as e:
+                print(e)
+
             ImageUtils.draw_rgba(mask_rgba, heart_img, cx, cy, size=(50, 50))
+            ImageUtils.draw_rgba(mask_rgba, helmet_img, cx_head,cy_head, size=(120, 70))
+
 
             Injures.noPart_simple(frame, mask_rgba, random_part, place, frame.shape, latest_result.pose_landmarks[0])
             
