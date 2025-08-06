@@ -1,8 +1,7 @@
 import random
 import cv2
 import numpy as np
-RIGHT = 0
-LEFT = 1
+import load_images
 
 model_path = './pose_landmarker_lite.task'
 
@@ -11,8 +10,6 @@ class BodyParts:
     Returns:
         _type_: _description_
     """
-    heart_img = cv2.imread("./heart.png", cv2.IMREAD_UNCHANGED)
-
     RIGHT_ARM = [12,14,16]
     LEFT_ARM = [11,13,15]
     RIGHT_LEG = [24,26,28]
@@ -29,8 +26,14 @@ class BodyParts:
         "BELLY": [11,12,23,24]
     }
 
-    all_parts = set(PARTS['RIGHT_ARM'] + PARTS['LEFT_ARM'] + ['RIGHT_LEG'] + ['LEFT_LEG'] + ['HEAD'] + ['BELLY'])
-
+    all_parts = set(
+    PARTS['RIGHT_ARM'] +
+    PARTS['LEFT_ARM'] +
+    PARTS['RIGHT_LEG'] +
+    PARTS['LEFT_LEG'] +
+    PARTS['HEAD'] +
+    PARTS['BELLY']
+)
     @classmethod
     def getRightArm(cls):
         """ Metoda zwracajaca kordy prawego ramienia
@@ -80,8 +83,6 @@ class BodyParts:
         return cls.PARTS[name]
     
 class Injures:
-    
-
     @classmethod
     def noArm_inpaint(cls, frame, mask, arm, image_shape, pose_landmarks):
         """
@@ -115,11 +116,12 @@ class Injures:
 
         return inpainted_frame
 
-                
     @classmethod
-    def noPart_simple(cls, frame, mask, chosen_part, place, image_shape, pose_landmarks):
+    def noPart_simple(cls, frame, mask, chosen_part, place, pose_landmarks):
         """
-        Usuwa kończynę (ramię) poprzez zamaskowanie i inpainting.
+        Usuwa kończynę poprzez zwykle zamazanie jej.
+
+        chosen_part - zmienna odpowiadajaca za wybor konczyny
         0 - prawa reka
         1 - lewa reka
         2 - prawa noga
@@ -131,7 +133,7 @@ class Injures:
         1 - srodek
         2 - dol (dlon lub stopa)
         """
-        h, w = image_shape[:2]
+        h, w = frame.shape[:2]
         part = []
         #zmienna na dlon albo stope
         part_end = 0
@@ -165,17 +167,18 @@ class Injures:
         x4, y4 = int(pose_landmarks[part_end].x * w), int(pose_landmarks[part_end].y * h)
         
         # Rysowanie maski ramienia
-        size = w*(abs(pose_landmarks[belly[0]].x-pose_landmarks[belly[1]].x))
-        if(place <= 0):
-            cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 255), int(0.25 * size))
-        if(place <= 1):
-            cv2.line(frame, (x2, y2), (x3, y3), (0, 0, 255), int(0.20 * size))
-        if(place <= 2):
-            cv2.line(frame, (x3, y3), (x4, y4), (0, 0, 255), int(0.15 * size))
+        try:
+            size = w*(abs(pose_landmarks[belly[0]].x-pose_landmarks[belly[1]].x))
+            if(place <= 0):
+                cv2.line(frame, (x1, y1), (x2, y2), (0, 0, 255), int(0.25 * size))
+            if(place <= 1):
+                cv2.line(frame, (x2, y2), (x3, y3), (0, 0, 255), int(0.20 * size))
+            if(place <= 2):
+                cv2.line(frame, (x3, y3), (x4, y4), (0, 0, 255), int(0.15 * size))
+        except:
+            print("linia bylaby za mala // TODO poprawic to z  0 < thickness && thickness <= MAX_THICKNESS in function 'cv::line'")
 
 class ImageUtils:
-    
-
     @classmethod
     def getHeartCoords(cls, pose_landmarks, image_shape):
         """_summary_
@@ -223,9 +226,9 @@ class ImageUtils:
             
         else:
             cy = int((shoulder_line * h) + 50)
-        
 
         return cx, cy
+    
     @classmethod
     def getHeadCoords(cls, pose_landmarks, image_shape):
         """_summary_
@@ -252,10 +255,10 @@ class ImageUtils:
         helmet_y = int((middle_head.y - (abs(middle_head.y - shoulder.y))) * h)
 
         return helmet_x, helmet_y
-
+   
+    @staticmethod
     def draw_rgba(mask, img, x_position, y_position, size=(50, 50)):
         """    Rysuje obrazek z kanałem alpha (img) na masce RGBA (mask).
-
 
         Args:
             mask (_type_): maska wejsciowa 
@@ -289,8 +292,8 @@ class ImageUtils:
         # w razie gdyby wartosci byly wyzsze niz 255, zamieniam na wartosc maks (255)
         mask[y_position:y_position+h, x_position:x_position+w, :3] = np.clip(roi, 0, 255).astype(np.uint8)
         mask[y_position:y_position+h, x_position:x_position+w, 3] = np.clip(out_alpha * 255, 0, 255).astype(np.uint8)
-
-
+    
+    @staticmethod
     def blend_rgba_over_bgr(background_bgr, overlay_rgba):
         """
         Nakłada overlay_rgba (z kanałem alpha) na tło BGR.
@@ -308,3 +311,68 @@ class ImageUtils:
 
         blended = background_bgr * (1 - alpha) + overlay_rgb * alpha
         return blended.astype(np.uint8)
+    
+    @staticmethod
+    def draw_gallery_background(mask, selected_index, main_images, variant_images, image_size=(100, 100), margin=10):
+        # Spróbuj załadować logo, jeśli istnieje
+        logo = cv2.imread("./images/logo.png", cv2.IMREAD_UNCHANGED)
+
+        h, w = mask.shape[:2]
+        main_w, main_h = 100, 100
+        variant_w, variant_h = 75, 75
+
+        y_main = h - main_h - margin
+
+        for i, img in enumerate(main_images):
+            x_main = margin + i * (main_w + margin)
+
+            # Rysuj warianty nad klikniętym
+            if i == selected_index:
+                for j, var in enumerate(variant_images):
+                    vx = x_main + j * (variant_w + margin)
+                    vy = y_main - variant_h - margin
+
+                    # Sprawdź poprawność kanałów
+                    if var.shape[2] == 3:
+                        var = cv2.cvtColor(var, cv2.COLOR_BGR2BGRA)
+
+                    ImageUtils.draw_rgba(mask, var, vx, vy, size=(variant_w, variant_h))
+
+            # Główne obrazki
+            if img.shape[2] == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+
+            ImageUtils.draw_rgba(mask, img, x_main, y_main, size=(main_w, main_h))
+
+        if logo is not None:
+            ImageUtils.draw_rgba(mask, logo, 0, 0, (logo.shape[1], logo.shape[0]))
+
+    @staticmethod
+    def draw_timer(mask, remaining_seconds):
+        text = "czas do wykrwawienia"
+        minutes = remaining_seconds // 60
+        seconds = remaining_seconds % 60
+        timer_text = f"{minutes:02}:{seconds:02}"
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.7
+        thickness = 2
+        color = (0, 0, 255, 255)  
+
+        x, y = mask.shape[1] - 250, 40
+
+        cv2.putText(mask, text, (x, y), font, scale, color, thickness, cv2.LINE_AA)
+        cv2.putText(mask, timer_text, (x, y + 30), font, scale + 0.2, color, thickness + 1, cv2.LINE_AA)
+
+    @staticmethod
+    def draw_Success(mask):
+        text = "ZALICZONE"
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 1
+        thickness = 3
+        color = (0, 255, 0, 255)  
+
+        x, y = mask.shape[1] - 250, 40
+
+        cv2.putText(mask, text, (x, y), font, scale, color, thickness, cv2.LINE_AA)
