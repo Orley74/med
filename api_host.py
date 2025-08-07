@@ -1,12 +1,14 @@
 """VR Camera — Optimized SBS VR for Cardboard/BoboVR
 ====================================================
 
+FullHD + max quality.
+
 - Receives JPEG frames via POST /upload_frame
 - Runs MediaPipe Pose + custom mask graphics in a background thread
 - Composites RGBA mask onto the frame
 - Applies barrel warp & perspective (trapezoidal) tilt
 - Shifts IPD for true stereoscopic SBS
-- Streams MJPEG on /stream.mjpg (~15fps) and serves static SBS on /sbs.jpg
+- Streams MJPEG on /stream.mjpg (~30fps) and serves static SBS on /sbs.jpg
 """
 
 import ssl, threading, time
@@ -21,9 +23,10 @@ from load_images import ipmed_img, helmet_img, staza_img, gaza_img, heart_img
 IMAGE_SIZE = (75, 75)
 MARGIN = 20
 TIME_LIMIT = 60
-ANALYSIS_INTERVAL_MS = 50
+ANALYSIS_INTERVAL_MS = 30        # ms — częstszy upload!
 STREAM_FPS = 15
-JPEG_Q = 90
+JPEG_Q = 85                        # Wyższa jakość
+zoom = 0.80                        # Oddalone, szeroki kadr
 
 HEADSET_PRESETS: Dict[str, Tuple[float, float]] = {
     "cardboard_v1":   (0.441, 0.156),
@@ -34,9 +37,9 @@ HEADSET_PRESETS: Dict[str, Tuple[float, float]] = {
 CURRENT_HEADSET = "cardboard_v1"
 BARREL_K1, BARREL_K2 = HEADSET_PRESETS[CURRENT_HEADSET]
 DISTORT   = True
-SHIFT_PX  = 10           # *** najważniejsze! *** (8–13 dla Cardboard/BoboVR)
+SHIFT_PX  = 10                     # Dla FullHD i Cardboard/BoboVR
 TILT_ENABLE = True
-TILT_FRAC   = 0.01       # bardzo mały tilt, środek nie rozjeżdża się
+TILT_FRAC   = 0.01
 
 # ================== BUFFERS ==================
 def init_buffers():
@@ -76,16 +79,23 @@ html = f"""<!DOCTYPE html>
   (async ()=> {{
     const INTERVAL = {ANALYSIS_INTERVAL_MS};
     const video = document.getElementById('v');
-    await new Promise(res=>setTimeout(res, 150));  // Give DOM a moment!
-    const stream = await navigator.mediaDevices.getUserMedia({{ video: {{ facingMode: 'environment', width: {{ideal:640}}, height: {{ideal:480}} }} }}).catch(()=>null);
+    await new Promise(res=>setTimeout(res, 150));
+    // --- FULL HD wymuszony ---
+    const stream = await navigator.mediaDevices.getUserMedia({{
+        video: {{
+          facingMode: 'environment',
+          width: {{ideal:1920, max:1920}},
+          height: {{ideal:1080, max:1080}}
+        }}
+    }}).catch(()=>null);
     if (!stream) return alert('Camera unavailable');
     video.srcObject = stream;
     await video.play();
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     function resize() {{
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
+      canvas.width = video.videoWidth || 1920;
+      canvas.height = video.videoHeight || 1080;
     }}
     video.addEventListener('loadedmetadata', resize);
     resize();
@@ -93,7 +103,7 @@ html = f"""<!DOCTYPE html>
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       canvas.toBlob(blob => {{
         if (blob) fetch('/upload_frame', {{ method: 'POST', body: blob, headers: {{'Content-Type':'image/jpeg'}} }});
-      }}, 'image/jpeg', 0.85);
+      }}, 'image/jpeg', 0.97);
     }}, INTERVAL);
   }})();
   </script>
@@ -121,22 +131,25 @@ def perspective_tilt(img: np.ndarray, which: str) -> np.ndarray:
     return cv2.warpPerspective(img,M,(w,h),flags=cv2.INTER_LINEAR,borderMode=cv2.BORDER_CONSTANT)
 
 def create_sbs(base: np.ndarray) -> np.ndarray:
+    global zoom
     h, w = base.shape[:2]
-    eye_width = int(w * 0.5)
-    # Przesunięcie źródła do środka — oko lewe patrzy bardziej w prawo, prawe w lewo
-    ipd_px = int(w * 0.07)  # typowe IPD, możesz dopasować 0.06-0.08
+    # --- Zoom out (FullHD)
+    base_small = cv2.resize(base, (int(w*zoom), int(h*zoom)))
+    bg = np.zeros((h, w, 3), np.uint8)
+    bx = (w - base_small.shape[1]) // 2
+    by = (h - base_small.shape[0]) // 2
+    bg[by:by+base_small.shape[0], bx:bx+base_small.shape[1]] = base_small
+    base = bg
+    # --- Eye crop szerszy! (np. 0.54 dla fullhd, bo i tak nie ma czarnych ramek)
+    eye_width = int(w * 0.6)
+    ipd_px = int(w * 0.065)    # Cardboard real IPD: 62-67mm -> 6-7% szerokości
     cx = w // 2
-
-    # Wycinamy dla lewego i prawego oka
     left_src  = base[:, cx - eye_width//2 - ipd_px//2 : cx + eye_width//2 - ipd_px//2]
     right_src = base[:, cx - eye_width//2 + ipd_px//2 : cx + eye_width//2 + ipd_px//2]
-
-    # Warp (beczka + tilt)
     left  = barrel_distort(left_src)  if DISTORT else left_src
     right = barrel_distort(right_src) if DISTORT else right_src
     left  = perspective_tilt(left, 'left')
     right = perspective_tilt(right, 'right')
-    # Składamy
     return np.hstack((left, right))
 
 
@@ -196,7 +209,7 @@ def mask_png():
         m = buffers['mask_rgba'].copy() if buffers['mask_rgba'] is not None else None
         sz = buffers['frame_size']
     if m is None:
-        h,w = sz if sz else (480,640)
+        h,w = sz if sz else (1080,1920)
         m = np.zeros((h,w,4),np.uint8)
     ok,p=cv2.imencode('.png',m)
     return make_response(p.tobytes(),{'Content-Type':'image/png'})
