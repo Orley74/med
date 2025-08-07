@@ -105,12 +105,11 @@ def run():
         return
 
     cv2.setMouseCallback("Blended", combined_click_callback, param=(frame.shape[0], frame.shape[1]))
-
+    
     while True:
         if not bleeding_stopped and selected_main == 0 and selected_variant == 1:
+            print("Wybrales STAZE")
             awaiting_click_to_stop_bleeding = True
-
-
 
         ret, frame = cap.read()
         if not ret:

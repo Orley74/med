@@ -126,7 +126,6 @@ class Injures:
         1 - lewa reka
         2 - prawa noga
         3 - lewa noga
-        4 - losowo
 
         place - miejsce "urwania" 
         0 - gora (przy brzuchu)
@@ -154,9 +153,6 @@ class Injures:
         elif chosen_part == 3:
             part_end = 31
             part = BodyParts.getLeftLeg()
-        elif chosen_part == 4:
-            part_end = 4
-            part = BodyParts.randomPart()
         else:
             raise Exception
         
