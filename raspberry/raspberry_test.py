@@ -137,6 +137,8 @@ def run():
     if not ret:
         print("Nie udało się uruchomić kamery.")
         return
+    
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
     landmarker.detect_async(mp_image, timestamp_ms)
     counter = 0
     cv2.setMouseCallback("Blended", combined_click_callback, param=(frame.shape[0], frame.shape[1]))
