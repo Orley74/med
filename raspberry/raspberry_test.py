@@ -6,7 +6,6 @@ import numpy as np
 from utils import *
 from load_images import *
 import random
-# --- ZAMIANA VideoCapture(0) NA PONIŻSZE ---
 
 import time
 import cv2

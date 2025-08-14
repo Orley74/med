@@ -15,10 +15,10 @@ gi.require_version('GstRtspServer', '1.0')
 gi.require_version('GObject', '2.0')
 from gi.repository import Gst, GstRtspServer, GObject
 
-# ================== KONFIG ==================
+# ================== CONFIG ==================
 # — Kamera —
-CAM_SIZE = (640, 480)       # (width, height) libcamera preview
-CAM_FPS  = 20
+CAM_SIZE = (720, 560)       # (width, height) libcamera preview
+CAM_FPS  = 60
 
 # — RTSP —
 RTSP_PORT = 8554
@@ -26,17 +26,17 @@ RTSP_PATH = "/vr"             # rtsp://<host>:8554/vr
 
 # — MediaPipe —
 MODEL_PATH = "pose_landmarker_lite.task"
-ANALYSIS_INTERVAL_MS = 1000    # co ile ms liczona jest nowa maska
+ANALYSIS_INTERVAL_MS = 500    # co ile ms liczona jest nowa maska
 
 # — Render / VR —
 WINDOW_NAME = "VR"
 SCREEN_FPS  = 60              # odświeżanie renderu
 IMAGE_SIZE  = (75, 75)
-MARGIN      = 20
+MARGIN      = 30
 TIME_LIMIT  = 60
 
 # Marginesy bezpieczeństwa jako UŁAMKI rozmiaru ramki (czarne pasy)
-SAFE_MARGIN_X_FRAC = 0.05     # po bokach
+SAFE_MARGIN_X_FRAC = 0.08     # po bokach
 SAFE_MARGIN_Y_FRAC = 0.04     # góra/dół
 
 # Presety soczewek
@@ -330,7 +330,10 @@ def display_thread():
             blended = bgr
 
         sbs = create_sbs(blended)
+        sbs = cv2.resize(sbs, (1920, 1080))  # wymuszenie FullHD
+        sbs = cv2.cvtColor(sbs, cv2.COLOR_RGB2BGR)
         cv2.imshow(WINDOW_NAME, sbs)
+
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
