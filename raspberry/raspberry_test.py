@@ -51,7 +51,7 @@ TIME = 60
 start_time = None  
 awaiting_click_to_stop_bleeding = False
 click_x, click_y = None, None  # zapis kliknięcia użytkownika
-frame_detect = 100 # co ktora klatke nakladac nowa detekcje / odciazyc plytke
+frame_detect = 50 # co ktora klatke nakladac nowa detekcje / odciazyc plytke
 
 main_images = [ipmed_img]
 variant_images = [helmet_img, staza_img, gaza_img]

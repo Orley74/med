@@ -6,4 +6,4 @@ cd "$(dirname "$0")"
 source .venv/bin/activate
 
 # Uruchom aplikację
-exec python3 raspberry_test.py
+exec python3 raspberry_VR.py
