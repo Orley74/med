@@ -138,6 +138,7 @@ def run():
         print("Nie udało się uruchomić kamery.")
         return
     
+    timestamp_ms = int(time.time() * 1000)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
     landmarker.detect_async(mp_image, timestamp_ms)
     counter = 0
