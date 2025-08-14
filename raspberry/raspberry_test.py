@@ -13,7 +13,7 @@ import cv2
 from picamera2 import Picamera2
 
 class Picamera2Cap:
-    def __init__(self, size=(640, 480)):
+    def __init__(self, size=(1640, 1232)):
         self.picam2 = Picamera2()
         # Szybka konfiguracja do CV: RGB888 + mniejsza rozdzielczość
         cfg = self.picam2.create_preview_configuration(
@@ -51,6 +51,7 @@ TIME = 60
 start_time = None  
 awaiting_click_to_stop_bleeding = False
 click_x, click_y = None, None  # zapis kliknięcia użytkownika
+frame_detect = 5 # co ktora klatke nakladac nowa detekcje / odciazyc plytke
 
 main_images = [ipmed_img]
 variant_images = [helmet_img, staza_img, gaza_img]
@@ -115,7 +116,7 @@ options = PoseLandmarkerOptions(
     result_callback=print_result
 )
 
-cap = Picamera2Cap(size=(640, 480))
+cap = Picamera2Cap(size=(1640, 1232))
 landmarker = PoseLandmarker.create_from_options(options)
 
 # --- Główna pętla ---
@@ -136,15 +137,17 @@ def run():
     if not ret:
         print("Nie udało się uruchomić kamery.")
         return
-
+    landmarker.detect_async(mp_image, timestamp_ms)
+    counter = 0
     cv2.setMouseCallback("Blended", combined_click_callback, param=(frame.shape[0], frame.shape[1]))
     
     while True:
+        counter += 1
         if not bleeding_stopped and selected_main == 0 and selected_variant == 1:
             print("Wybrales STAZE")
             awaiting_click_to_stop_bleeding = True
 
-        ret, frame, frame_rgb = cap.read()
+        ret, frame_rgb, frame = cap.read()
         if not ret:
             continue
 
@@ -159,7 +162,8 @@ def run():
 
         timestamp_ms = int(time.time() * 1000)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-        landmarker.detect_async(mp_image, timestamp_ms)
+        if counter % frame_detect == 0:
+            landmarker.detect_async(mp_image, timestamp_ms)
 
         h, w = frame.shape[:2]
         mask_rgba = np.zeros((h, w, 4), dtype=np.uint8)
@@ -193,7 +197,7 @@ def run():
                 wound_x, wound_y = int(lm.x * w), int(lm.y * h)
 
                 if click_x is not None and click_y is not None:
-                    if abs(click_x - wound_x) <= 30 and abs(click_y - wound_y) <= 30:
+                    if abs(click_x - wound_x) <= 50 and abs(click_y - wound_y) <= 50:
                         print("Rana została opatrzona!")
                         ImageUtils.draw_Success(mask_rgba)
                         bleeding_stopped = True
