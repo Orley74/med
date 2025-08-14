@@ -13,7 +13,7 @@ import cv2
 from picamera2 import Picamera2
 
 class Picamera2Cap:
-    def __init__(self, size=(640, 480)):
+    def __init__(self, size=(1920, 1280)):
         self.picam2 = Picamera2()
         # Szybka konfiguracja do CV: RGB888 + mniejsza rozdzielczość
         cfg = self.picam2.create_preview_configuration(
