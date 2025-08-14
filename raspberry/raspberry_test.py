@@ -36,10 +36,6 @@ class Picamera2Cap:
         self.picam2.stop()
         self.picam2.close()
 
-# --- U C I E B I E : PODMIANA TEJ LINII ---
-# cap = cv2.VideoCapture(0)
-cap = Picamera2Cap(size=(620, 480))
-
 # Reszta Twojego kodu może zostać prawie bez zmian:
 # ret, frame = cap.read()
 # tu 'frame' to BGR do cv2.imshow, a masz też 'frame_rgb' do MediaPipe
