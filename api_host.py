@@ -20,13 +20,18 @@ from utils import ImageUtils, BodyParts, Injures
 from load_images import ipmed_img, helmet_img, staza_img, gaza_img, heart_img
 
 # ================== CONFIG ==================
+SAFE_MARGIN_X_FRAC = 0.2  # ułamek szerokości na czarne marginesy po bokach (np. 0.05 = 5%)
+SAFE_MARGIN_Y_FRAC = 0.04  # ułamek wysokości na margines u góry i dołu
+
 IMAGE_SIZE = (75, 75)
 MARGIN = 20
 TIME_LIMIT = 60
-ANALYSIS_INTERVAL_MS = 30        # ms — częstszy upload!
-STREAM_FPS = 15
-JPEG_Q = 85                        # Wyższa jakość
-zoom = 0.80                        # Oddalone, szeroki kadr
+ANALYSIS_INTERVAL_MS = 100        # ms — częstszy upload!
+STREAM_FPS = 20
+JPEG_Q = 90                       # Wyższa jakość
+zoom = 0.72                        # Oddalone, szeroki kadr
+
+
 
 HEADSET_PRESETS: Dict[str, Tuple[float, float]] = {
     "cardboard_v1":   (0.441, 0.156),
@@ -79,7 +84,7 @@ html = f"""<!DOCTYPE html>
   (async ()=> {{
     const INTERVAL = {ANALYSIS_INTERVAL_MS};
     const video = document.getElementById('v');
-    await new Promise(res=>setTimeout(res, 150));
+    await new Promise(res=>setTimeout(res, 50));
     // --- FULL HD wymuszony ---
     const stream = await navigator.mediaDevices.getUserMedia({{
         video: {{
@@ -133,23 +138,49 @@ def perspective_tilt(img: np.ndarray, which: str) -> np.ndarray:
 def create_sbs(base: np.ndarray) -> np.ndarray:
     global zoom
     h, w = base.shape[:2]
-    # --- Zoom out (FullHD)
-    base_small = cv2.resize(base, (int(w*zoom), int(h*zoom)))
+
+    # --- Zoom out treści, zanim dodamy marginesy ---
+    base_small = cv2.resize(base, (int(w * zoom), int(h * zoom)))
+
+    # --- Marginesy bezpieczeństwa jako ułamki rozmiaru ramki ---
+    mx = max(0, int(w * SAFE_MARGIN_X_FRAC))  # lewy/prawy
+    my = max(0, int(h * SAFE_MARGIN_Y_FRAC))  # góra/dół
+
+    # Płótno docelowe (pełny rozmiar ramki) z czarnym tłem
     bg = np.zeros((h, w, 3), np.uint8)
-    bx = (w - base_small.shape[1]) // 2
-    by = (h - base_small.shape[0]) // 2
-    bg[by:by+base_small.shape[0], bx:bx+base_small.shape[1]] = base_small
+
+    # Obszar dostępny na obraz po odjęciu marginesów
+    avail_w = max(1, w - 2 * mx)
+    avail_h = max(1, h - 2 * my)
+
+    # Jeśli base_small nie mieści się w obszarze, dopasuj (bez powiększania)
+    scale = min(avail_w / base_small.shape[1], avail_h / base_small.shape[0], 1.0)
+    new_w = max(1, int(base_small.shape[1] * scale))
+    new_h = max(1, int(base_small.shape[0] * scale))
+    content = cv2.resize(base_small, (new_w, new_h)) if (new_w, new_h) != base_small.shape[1::-1] else base_small
+
+    # Wycentruj treść w środku obszaru roboczego (z marginesami po bokach i górze/dole)
+    x0 = mx + (avail_w - new_w) // 2
+    y0 = my + (avail_h - new_h) // 2
+    bg[y0:y0+new_h, x0:x0+new_w] = content
+
+    # Od tej chwili "base" ma pełny rozmiar z czarną ramką
     base = bg
-    # --- Eye crop szerszy! (np. 0.54 dla fullhd, bo i tak nie ma czarnych ramek)
+
+    # --- Eye crop (szerzej) + IPD ---
     eye_width = int(w * 0.6)
-    ipd_px = int(w * 0.065)    # Cardboard real IPD: 62-67mm -> 6-7% szerokości
+    ipd_px = int(w * 0.065)    # 6–7% szerokości dla ~62–67 mm
     cx = w // 2
+
     left_src  = base[:, cx - eye_width//2 - ipd_px//2 : cx + eye_width//2 - ipd_px//2]
     right_src = base[:, cx - eye_width//2 + ipd_px//2 : cx + eye_width//2 + ipd_px//2]
+
+    # Zniekształcenia i tilt
     left  = barrel_distort(left_src)  if DISTORT else left_src
     right = barrel_distort(right_src) if DISTORT else right_src
     left  = perspective_tilt(left, 'left')
     right = perspective_tilt(right, 'right')
+
     return np.hstack((left, right))
 
 
@@ -216,7 +247,7 @@ def mask_png():
 
 # ================== WORKER ==================
 def process_loop():
-    st = time.time(); targ = BodyParts.randomPart(); idx = np.random.randint(len(targ)); rndv = np.random.randint(5)
+    st = time.time(); targ = BodyParts.randomPart(); idx = np.random.randint(len(targ)); rndv = np.random.randint(3)
     while True:
         with buffers['lock']:
             frm = buffers['raw'].copy() if buffers['raw'] is not None else None
@@ -224,17 +255,22 @@ def process_loop():
             time.sleep(0.01); continue
         try:
             h,w = frm.shape[:2]; mask = np.zeros((h,w,4),np.uint8)
-            ImageUtils.draw_gallery_background(mask,-1,[ipmed_img],[helmet_img,staza_img,gaza_img],image_size=IMAGE_SIZE,margin=MARGIN)
+            ImageUtils.draw_gallery_background(mask,-1,[ipmed_img],[helmet_img,staza_img,gaza_img],image_size=(int(0.15*h),int(0.15*w)),margin=MARGIN)
             res=landmarker.detect(mp_img(image_format=mp.ImageFormat.SRGB,data=frm))
             if res and res.pose_landmarks:
                 lms=res.pose_landmarks[0]
                 for i in targ: x,y=int(lms[i].x*w),int(lms[i].y*h); cv2.circle(mask,(x,y),8,(0,255,0,255),-1)
                 try: cx,cy=ImageUtils.getHeartCoords(lms,frm.shape); ImageUtils.draw_rgba(mask,heart_img,cx,cy,size=(50,50))
                 except: pass
-                rem= max(0,TIME_LIMIT-int(time.time()-st)); ImageUtils.draw_timer(mask,rem)
                 Injures.noPart_simple(frm,mask,rndv,idx,lms)
+            
+            rem= max(0,TIME_LIMIT-int(time.time()-st)); ImageUtils.draw_timer(mask,rem,1.5,6)
+
             with buffers['lock']: buffers['mask_rgba']=mask
-        except: pass
+
+        except Exception as e:
+            print(e)
+
         time.sleep(0.01)
 
 if __name__ == '__main__':

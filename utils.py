@@ -314,8 +314,8 @@ class ImageUtils:
         logo = cv2.imread("./images/logo.png", cv2.IMREAD_UNCHANGED)
 
         h, w = mask.shape[:2]
-        main_w, main_h = 100, 100
-        variant_w, variant_h = 75, 75
+        main_w, main_h = image_size
+        variant_w, variant_h = int(image_size[0]*0.75), int(image_size[1]*0.75)
 
         y_main = h - main_h - margin
 
@@ -341,24 +341,22 @@ class ImageUtils:
             ImageUtils.draw_rgba(mask, img, x_main, y_main, size=(main_w, main_h))
 
         if logo is not None:
-            ImageUtils.draw_rgba(mask, logo, 0, 0, (logo.shape[1], logo.shape[0]))
+            ImageUtils.draw_rgba(mask, logo, 0, 0, (main_w, main_h))
 
     @staticmethod
-    def draw_timer(mask, remaining_seconds):
+    def draw_timer(mask, remaining_seconds, scale = 0.7, thickness = 3):
         text = "czas do wykrwawienia"
         minutes = remaining_seconds // 60
         seconds = remaining_seconds % 60
         timer_text = f"{minutes:02}:{seconds:02}"
 
         font = cv2.FONT_HERSHEY_SIMPLEX
-        scale = 0.7
-        thickness = 2
         color = (0, 0, 255, 255)  
 
-        x, y = mask.shape[1] - 250, 40
+        x, y = int(mask.shape[1] - mask.shape[1]*0.4), 40
 
         cv2.putText(mask, text, (x, y), font, scale, color, thickness, cv2.LINE_AA)
-        cv2.putText(mask, timer_text, (x, y + 30), font, scale + 0.2, color, thickness + 1, cv2.LINE_AA)
+        cv2.putText(mask, timer_text, (x, int(y + 0.07*mask.shape[0])), font, scale + 0.2, color, thickness + 1, cv2.LINE_AA)
 
     @staticmethod
     def draw_Success(mask):
