@@ -119,7 +119,7 @@ options = PoseLandmarkerOptions(
     result_callback=print_result
 )
 
-cap = cv2.VideoCapture(0)
+cap = Picamera2Cap(size=(640, 480))
 landmarker = PoseLandmarker.create_from_options(options)
 
 # --- Główna pętla ---
@@ -136,7 +136,7 @@ def run():
     random_part = random.randint(0, 4)
 
     cv2.namedWindow("Blended")
-    ret, frame = cap.read()
+    ret, frame, frame_rgb = cap.read()
     if not ret:
         print("Nie udało się uruchomić kamery.")
         return
