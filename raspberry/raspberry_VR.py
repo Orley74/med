@@ -1,39 +1,45 @@
+#!/usr/bin/env python3
+import os, sys, time, threading
 import cv2
+import numpy as np
 import mediapipe as mp
 from mediapipe.tasks.python import vision
-import time
-import numpy as np
-from utils import *
-from load_images import *
-import random
-
-# --- KAMERA: Picamera2 ---
+from utils import ImageUtils, BodyParts, Injures
+from load_images import ipmed_img, helmet_img, staza_img, gaza_img, heart_img
 from picamera2 import Picamera2
 
-class Picamera2Cap:
-    def __init__(self, size=(1640, 1232)):
-        self.picam2 = Picamera2()
-        cfg = self.picam2.create_preview_configuration(main={"size": size, "format": "RGB888"})
-        self.picam2.configure(cfg)
-        self.picam2.start()
-        time.sleep(0.2)
-        self._last_bgr = None
+# ====== GStreamer / RTSP ======
+import gi
+gi.require_version('Gst', '1.0')
+gi.require_version('GstRtspServer', '1.0')
+gi.require_version('GObject', '2.0')
+from gi.repository import Gst, GstRtspServer, GObject
 
-    def read(self):
-        frame_rgb = self.picam2.capture_array()                 # RGB (dla MediaPipe idealne)
-        self._last_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)  # BGR (do OpenCV)
-        return True, self._last_bgr, frame_rgb                  # ret, frame_bgr, frame_rgb
+# ================== KONFIG ==================
+# — Kamera —
+CAM_SIZE = (1640, 1232)       # (width, height) libcamera preview
+CAM_FPS  = 30
 
-    def release(self):
-        self.picam2.stop()
-        self.picam2.close()
+# — RTSP —
+RTSP_PORT = 8554
+RTSP_PATH = "/vr"             # rtsp://<host>:8554/vr
 
-# ================== OPTYKA / VR CONFIG ==================
-# Marginesy bezpieczeństwa jako UŁAMKI rozmiaru ramki
-SAFE_MARGIN_X_FRAC = 0.05  # 5% szerokości po lewej i prawej (czarne pasy)
-SAFE_MARGIN_Y_FRAC = 0.04  # 4% wysokości u góry i dołu (czarne pasy)
+# — MediaPipe —
+MODEL_PATH = "pose_landmarker_lite.task"
+ANALYSIS_INTERVAL_MS = 200    # co ile ms liczona jest nowa maska
 
-# Presety dla zniekształcenia beczkowatego (k1, k2) – dopasuj do headsetu
+# — Render / VR —
+WINDOW_NAME = "VR"
+SCREEN_FPS  = 60              # odświeżanie renderu
+IMAGE_SIZE  = (75, 75)
+MARGIN      = 20
+TIME_LIMIT  = 60
+
+# Marginesy bezpieczeństwa jako UŁAMKI rozmiaru ramki (czarne pasy)
+SAFE_MARGIN_X_FRAC = 0.05     # po bokach
+SAFE_MARGIN_Y_FRAC = 0.04     # góra/dół
+
+# Presety soczewek
 HEADSET_PRESETS = {
     "cardboard_v1":   (0.441, 0.156),
     "cardboard_v2":   (0.34,  0.55),
@@ -43,21 +49,48 @@ HEADSET_PRESETS = {
 CURRENT_HEADSET = "cardboard_v1"
 BARREL_K1, BARREL_K2 = HEADSET_PRESETS[CURRENT_HEADSET]
 
-# Przekształcenia
-DISTORT = True         # włącz/wyłącz beczkę
-TILT_ENABLE = True     # włącz/wyłącz perspektywiczny tilt (trapez)
-TILT_FRAC = 0.01       # siła tilt’u (ułamek szerokości)
+DISTORT     = True
+TILT_ENABLE = True
+TILT_FRAC   = 0.01
+zoom        = 0.72
+EYE_WIDTH_FRAC = 0.60
+IPD_FRAC       = 0.065
 
-# Stereoskopia
-zoom = 0.72            # oddalenie (1.0 = brak)
-EYE_WIDTH_FRAC = 0.60  # szerokość jednego oka względem całej ramki
-IPD_FRAC = 0.065       # 6–7% szerokości (~62–67 mm dla Cardboard/BoboVR)
+# ================== BUFFERY WSPÓŁDZIELONE ==================
+buffers = {
+    "lock": threading.Lock(),
+    "raw_bgr": None,     # ostatnia surowa klatka BGR z kamery
+    "raw_rgb": None,     # ostatnia surowa klatka RGB (dla MediaPipe)
+    "mask_rgba": None,   # ostatnia wyliczona maska RGBA
+    "frame_size": None,  # (h, w)
+}
 
-# Cache map dla beczki (przyspieszenie)
+# ================== Picamera2 WRAPPER ==================
+class Picamera2Cap:
+    def __init__(self, size=(1640, 1232), fps=30):
+        self.picam2 = Picamera2()
+        self.size = size
+        self.fps  = fps
+        cfg = self.picam2.create_preview_configuration(
+            main={"size": (size[0], size[1]), "format": "RGB888"}
+        )
+        self.picam2.configure(cfg)
+        self.picam2.start()
+        time.sleep(0.2)
+
+    def read_both(self):
+        """Zwraca BGR (dla OpenCV) + RGB (dla MediaPipe)."""
+        frame_rgb = self.picam2.capture_array()                   # RGB
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)    # BGR
+        return True, frame_bgr, frame_rgb
+
+    def close(self):
+        self.picam2.stop()
+        self.picam2.close()
+
+# ================== OPTYKA / VR ==================
 _barrel_cache = {}
-
 def barrel_distort(img: np.ndarray, k1=BARREL_K1, k2=BARREL_K2) -> np.ndarray:
-    """Beczkowe zniekształcenie dla pojedynczego oka."""
     h, w = img.shape[:2]
     key = (h, w, k1, k2)
     if key not in _barrel_cache:
@@ -65,126 +98,61 @@ def barrel_distort(img: np.ndarray, k1=BARREL_K1, k2=BARREL_K2) -> np.ndarray:
                       [0, w, h/2],
                       [0, 0,   1 ]], np.float32)
         D = np.array([k1, k2, 0, 0, 0], np.float32)
-        _barrel_cache[key] = cv2.initUndistortRectifyMap(K, D, None, K, (w, h), cv2.CV_32FC1)
+        _barrel_cache[key] = cv2.initUndistortRectifyMap(
+            K, D, None, K, (w, h), cv2.CV_32FC1
+        )
     m1, m2 = _barrel_cache[key]
     return cv2.remap(img, m1, m2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
 
 def perspective_tilt(img: np.ndarray, which: str) -> np.ndarray:
-    if not TILT_ENABLE:
-        return img
+    if not TILT_ENABLE: return img
     h, w = img.shape[:2]
     off = TILT_FRAC * w
-    src = np.float32([[0, 0], [w, 0], [0, h], [w, h]])
-    if which == 'left':
-        dst = np.float32([[0, 0], [w - off, off], [0, h], [w - off, h - off]])
+    src = np.float32([[0,0],[w,0],[0,h],[w,h]])
+    if which=='left':
+        dst = np.float32([[0,0],[w-off,off],[0,h],[w-off,h-off]])
     else:
-        dst = np.float32([[off, off], [w, 0], [off, h - off], [w, h]])
+        dst = np.float32([[off,off],[w,0],[off,h-off],[w,h]])
     M = cv2.getPerspectiveTransform(src, dst)
     return cv2.warpPerspective(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
 
 def create_sbs(base_bgr: np.ndarray) -> np.ndarray:
-    """Tworzy obraz SBS z marginesami, zoomem, beczką, tilt’em i IPD."""
     global zoom
     h, w = base_bgr.shape[:2]
 
-    # 1) Zoom out treści (przed marginesami)
-    base_small = cv2.resize(base_bgr, (int(w * zoom), int(h * zoom)))
+    # Zoom out
+    base_small = cv2.resize(base_bgr, (int(w*zoom), int(h*zoom)))
 
-    # 2) Marginesy bezpieczeństwa (procentowe)
+    # Marginesy bezpieczeństwa
     mx = max(0, int(w * SAFE_MARGIN_X_FRAC))
     my = max(0, int(h * SAFE_MARGIN_Y_FRAC))
     bg = np.zeros((h, w, 3), np.uint8)
-
-    avail_w = max(1, w - 2 * mx)
-    avail_h = max(1, h - 2 * my)
+    avail_w = max(1, w - 2*mx)
+    avail_h = max(1, h - 2*my)
     scale = min(avail_w / base_small.shape[1], avail_h / base_small.shape[0], 1.0)
     new_w = max(1, int(base_small.shape[1] * scale))
     new_h = max(1, int(base_small.shape[0] * scale))
     content = cv2.resize(base_small, (new_w, new_h)) if (new_w, new_h) != base_small.shape[1::-1] else base_small
+    x0 = mx + (avail_w - new_w)//2
+    y0 = my + (avail_h - new_h)//2
+    bg[y0:y0+new_h, x0:x0+new_w] = content
+    base = bg
 
-    x0 = mx + (avail_w - new_w) // 2
-    y0 = my + (avail_h - new_h) // 2
-    bg[y0:y0 + new_h, x0:x0 + new_w] = content
-    base = bg  # po marginesach
-
-    # 3) Ustawienia oczu i IPD
+    # Oczy
     eye_width = int(w * EYE_WIDTH_FRAC)
-    ipd_px = int(w * IPD_FRAC)
+    ipd_px    = int(w * IPD_FRAC)
     cx = w // 2
+    left_src  = base[:, cx - eye_width//2 - ipd_px//2 : cx + eye_width//2 - ipd_px//2]
+    right_src = base[:, cx - eye_width//2 + ipd_px//2 : cx + eye_width//2 + ipd_px//2]
 
-    # Źródła dla lewego i prawego oka (przed zniekształceniami)
-    left_src  = base[:, cx - eye_width // 2 - ipd_px // 2 : cx + eye_width // 2 - ipd_px // 2]
-    right_src = base[:, cx - eye_width // 2 + ipd_px // 2 : cx + eye_width // 2 + ipd_px // 2]
-
-    # 4) Beczka i tilt na każde oko
     left  = barrel_distort(left_src)  if DISTORT else left_src
     right = barrel_distort(right_src) if DISTORT else right_src
     left  = perspective_tilt(left, 'left')
     right = perspective_tilt(right, 'right')
 
-    # 5) Złożenie SBS
-    sbs = np.hstack((left, right))
-    return sbs
+    return np.hstack((left, right))
 
-# ================== LOGIKA APLIKACJI ==================
-# --- Konfiguracje globalne (Twoje) ---
-selected_index = -1
-IMAGE_SIZE = (75, 75)
-MARGIN = 20
-bleeding_stopped = False
-selected_main = None
-selected_variant = None
-TIME = 60
-start_time = None
-awaiting_click_to_stop_bleeding = False
-click_x, click_y = None, None
-frame_detect = 50
-
-main_images = [ipmed_img]
-variant_images = [helmet_img, staza_img, gaza_img]
-
-# --- Obsługa kliknięcia (jak było) ---
-def gallery_click(event, x, y, flags, param):
-    global selected_index, selected_main, selected_variant
-    h, w = param
-    img_w, img_h = IMAGE_SIZE
-    y_main = h - 100 - MARGIN
-
-    if event == cv2.EVENT_LBUTTONDOWN:
-        for i in range(len(main_images)):
-            img_x = MARGIN + i * (100 + MARGIN)
-            if img_x <= x <= img_x + 100 and y_main <= y <= y_main + 100:
-                selected_index = -1 if selected_index == i else i
-                selected_main = i
-                selected_variant = None
-                print("Wybrales IPMED")
-                return
-
-        if selected_index is not None and selected_index >= 0:
-            for j in range(len(variant_images)):
-                vx = MARGIN + selected_index * (100 + MARGIN) + j * (75 + MARGIN)
-                vy = y_main - 75 - MARGIN
-                if vx <= x <= vx + 75 and vy <= y <= vy + 75:
-                    selected_variant = j
-                    return
-
-        selected_index = -1
-        selected_main = None
-        selected_variant = None
-
-def body_click(event, x, y, flags, param):
-    global click_x, click_y, awaiting_click_to_stop_bleeding
-    if not awaiting_click_to_stop_bleeding:
-        return
-    if event == cv2.EVENT_LBUTTONDOWN:
-        click_x, click_y = x, y
-
-def combined_click_callback(event, x, y, flags, param):
-    # Uwaga: w trybie SBS współrzędne mogą być nieidealnie zgodne przez zniekształcenia.
-    gallery_click(event, x, y, flags, param)
-    body_click(event, x, y, flags, param)
-
-# --- MediaPipe Setup ---
+# ================== MEDIA PIPE (ASYNC) ==================
 BaseOptions = mp.tasks.BaseOptions
 PoseLandmarker = mp.tasks.vision.PoseLandmarker
 PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
@@ -192,125 +160,201 @@ PoseLandmarkerResult = mp.tasks.vision.PoseLandmarkerResult
 VisionRunningMode = mp.tasks.vision.RunningMode
 
 latest_result = None
-def print_result(result: PoseLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
+def mp_callback(result: PoseLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
     global latest_result
     latest_result = result
 
-options = PoseLandmarkerOptions(
-    base_options=BaseOptions(model_asset_path=model_path),
+mp_options = PoseLandmarkerOptions(
+    base_options=BaseOptions(model_asset_path=MODEL_PATH),
     running_mode=VisionRunningMode.LIVE_STREAM,
-    result_callback=print_result
+    result_callback=mp_callback
 )
+landmarker = PoseLandmarker.create_from_options(mp_options)
 
-cap = Picamera2Cap(size=(1640, 1232))
-landmarker = PoseLandmarker.create_from_options(options)
+# ================== RTSP SERVER (appsrc) ==================
+rtsp_appsrc = None  # wypełni się po starcie sesji
+def on_media_configure(factory, media):
+    global rtsp_appsrc
+    element = media.get_element()
+    appsrc = element.get_child_by_name("mysrc")
+    rtsp_appsrc = appsrc
+    # ustaw framerate przez property, PTS będzie nadawany w capture_thread
+    if appsrc:
+        appsrc.set_property("is-live", True)
+        appsrc.set_property("format", Gst.Format.TIME)
 
-# --- Główna pętla ---
-def run():
-    global latest_result, start_time
-    global bleeding_stopped, selected_main, selected_variant
-    global target, place, click_x, click_y, awaiting_click_to_stop_bleeding
+def start_rtsp_server(width, height, fps):
+    GObject.threads_init()
+    Gst.init(None)
 
-    if start_time is None:
-        start_time = time.time()
+    server = GstRtspServer.RTSPServer()
+    server.props.service = str(RTSP_PORT)
+    factory = GstRtspServer.RTSPMediaFactory()
+    factory.set_shared(True)
 
+    # appsrc (BGR) -> videoconvert -> x264enc(low-latency) -> rtph264pay
+    launch = (
+        f"( appsrc name=mysrc is-live=true block=true format=GST_FORMAT_TIME "
+        f"caps=video/x-raw,format=BGR,width={width},height={height},framerate={fps}/1 "
+        f"! videoconvert "
+        f"! x264enc tune=zerolatency speed-preset=veryfast bitrate=2000 key-int-max={fps} "
+        f"! rtph264pay name=pay0 pt=96 )"
+    )
+    factory.set_launch(launch)
+    factory.connect("media-configure", on_media_configure)
+
+    mounts = server.get_mount_points()
+    mounts.add_factory(RTSP_PATH, factory)
+    server.attach(None)
+    print(f"[RTSP] uruchomiono: rtsp://<host>:{RTSP_PORT}{RTSP_PATH}")
+
+# ================== WĄTKI ==================
+
+def capture_thread():
+    """1) Kamerka → bufor + push do RTSP (appsrc)."""
+    global rtsp_appsrc
+    cap = Picamera2Cap(size=CAM_SIZE, fps=CAM_FPS)
+    h, w = CAM_SIZE[1], CAM_SIZE[0]
+    frame_duration_ns = int(1e9 / CAM_FPS)
+    pts_ns = 0
+
+    try:
+        while True:
+            ok, frame_bgr, frame_rgb = cap.read_both()
+            if not ok:
+                continue
+            with buffers["lock"]:
+                buffers["raw_bgr"] = frame_bgr
+                buffers["raw_rgb"] = frame_rgb
+                if buffers["frame_size"] is None:
+                    buffers["frame_size"] = (frame_bgr.shape[0], frame_bgr.shape[1])
+
+            # RTSP push
+            appsrc = rtsp_appsrc
+            if appsrc is not None:
+                data = frame_bgr.tobytes()
+                buf = Gst.Buffer.new_allocate(None, len(data), None)
+                buf.fill(0, data)
+                buf.pts = pts_ns
+                buf.dts = pts_ns
+                buf.duration = frame_duration_ns
+                pts_ns += frame_duration_ns
+                try:
+                    appsrc.emit("push-buffer", buf)
+                except Exception as e:
+                    # gdy klient się rozłączy – nic strasznego
+                    pass
+    finally:
+        cap.close()
+
+def mask_thread():
+    """2) Co ANALYSIS_INTERVAL_MS liczy maskę na bazie najnowszej klatki."""
+    global latest_result
+    start_time = time.time()
     target = BodyParts.randomPart()
-    place = random.randint(0, 3)
-    random_part = random.randint(0, 4)
-
-    # Okno VR w pełnym ekranie
-    window_name = "VR"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-
-    ret, frame_bgr, frame_rgb = cap.read()
-    if not ret:
-        print("Nie udało się uruchomić kamery.")
-        return
-
-    timestamp_ms = int(time.time() * 1000)
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-    landmarker.detect_async(mp_image, timestamp_ms)
-    counter = 0
-
-    # Callback myszy – param to oryginalny rozmiar ramki (przed SBS)
-    cv2.setMouseCallback(window_name, combined_click_callback, param=(frame_bgr.shape[0], frame_bgr.shape[1]))
+    place = np.random.randint(0, 3)
+    random_part = np.random.randint(0, 4)
 
     while True:
-        counter += 1
+        t0 = time.time()
 
-        if not bleeding_stopped and selected_main == 0 and selected_variant == 1:
-            # Wybrano stazę
-            awaiting_click_to_stop_bleeding = True
+        with buffers["lock"]:
+            rgb = None if buffers["raw_rgb"] is None else buffers["raw_rgb"].copy()
+            bgr = None if buffers["raw_bgr"] is None else buffers["raw_bgr"].copy()
 
-        ret, frame_bgr, frame_rgb = cap.read()
-        if not ret:
+        if rgb is None or bgr is None:
+            time.sleep(0.005)
             continue
+
+        # MediaPipe async
+        timestamp_ms = int(time.time() * 1000)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        landmarker.detect_async(mp_image, timestamp_ms)
+
+        h, w = bgr.shape[:2]
+        mask = np.zeros((h, w, 4), np.uint8)
+
+        # UI
+        ImageUtils.draw_gallery_background(
+            mask, -1, [ipmed_img], [helmet_img, staza_img, gaza_img],
+            image_size=IMAGE_SIZE, margin=MARGIN
+        )
+
+        # wykorzystaj najnowszy wynik (z callbacku)
+        res = latest_result
+        if res and res.pose_landmarks:
+            lms = res.pose_landmarks[0]
+            for i in target:
+                x, y = int(lms[i].x * w), int(lms[i].y * h)
+                cv2.circle(mask, (x, y), 8, (0, 255, 0, 255), -1)
+            try:
+                cx, cy = ImageUtils.getHeartCoords(lms, bgr.shape)
+                ImageUtils.draw_rgba(mask, heart_img, cx, cy, size=(50, 50))
+            except:
+                pass
+
+            elapsed = int(time.time() - start_time)
+            remaining = max(0, TIME_LIMIT - elapsed)
+            ImageUtils.draw_timer(mask, remaining)
+
+            Injures.noPart_simple(bgr, mask, random_part, place, lms)
+
+        with buffers["lock"]:
+            buffers["mask_rgba"] = mask
+
+        # regulacja okresu
+        dt = (time.time() - t0)
+        sleep_s = max(0.0, (ANALYSIS_INTERVAL_MS / 1000.0) - dt)
+        time.sleep(sleep_s)
+
+def display_thread():
+    """3) Scala surową klatkę + maskę i wyświetla SBS VR fullscreen."""
+    # pełny ekran
+    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+    dt = 1.0 / SCREEN_FPS
+    while True:
+        t0 = time.time()
+        with buffers["lock"]:
+            bgr = None if buffers["raw_bgr"] is None else buffers["raw_bgr"].copy()
+            msk = None if buffers["mask_rgba"] is None else buffers["mask_rgba"].copy()
+        if bgr is None:
+            time.sleep(0.005)
+            continue
+
+        if msk is not None and msk.shape[:2] == bgr.shape[:2]:
+            a = msk[:, :, 3:4].astype(np.float32) / 255.0
+            blended = cv2.convertScaleAbs(bgr * (1 - a) + msk[:, :, :3] * a)
+        else:
+            blended = bgr
+
+        sbs = create_sbs(blended)
+        cv2.imshow(WINDOW_NAME, sbs)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
             break
-        elif key == ord(' '):
-            target = BodyParts.randomPart()
-            place = random.randint(0, 3)
-            random_part = random.randint(0, 4)
-            click_x, click_y = None, None
 
-        timestamp_ms = int(time.time() * 1000)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-        if counter % frame_detect == 0:
-            landmarker.detect_async(mp_image, timestamp_ms)
+        rem = dt - (time.time() - t0)
+        if rem > 0:
+            time.sleep(rem)
 
-        h, w = frame_bgr.shape[:2]
-        mask_rgba = np.zeros((h, w, 4), dtype=np.uint8)
-
-        ImageUtils.draw_gallery_background(mask_rgba, selected_index, main_images, variant_images,
-                                           image_size=IMAGE_SIZE, margin=MARGIN)
-
-        if latest_result and latest_result.pose_landmarks:
-            landmarks = latest_result.pose_landmarks[0]
-            for idx, lm in enumerate(landmarks):
-                x, y = int(lm.x * w), int(lm.y * h)
-                if idx in target:
-                    cv2.circle(mask_rgba, (x, y), 8, (0, 255, 0, 255), -1)
-
-            try:
-                cx, cy = ImageUtils.getHeartCoords(landmarks, frame_bgr.shape)
-                ImageUtils.draw_rgba(mask_rgba, heart_img, cx, cy, size=(50, 50))
-            except Exception as e:
-                print("Błąd przy obliczaniu serca:", e)
-
-            if not bleeding_stopped:
-                elapsed = int(time.time() - start_time)
-                remaining = max(0, TIME - elapsed)
-                ImageUtils.draw_timer(mask_rgba, remaining)
-                Injures.noPart_simple(frame_bgr, mask_rgba, random_part, place, landmarks)
-
-                idx = target[place] if place < len(target) else target[-1]
-                lm = landmarks[idx]
-                wound_x, wound_y = int(lm.x * w), int(lm.y * h)
-
-                if click_x is not None and click_y is not None:
-                    if abs(click_x - wound_x) <= 50 and abs(click_y - wound_y) <= 50:
-                        print("Rana została opatrzona!")
-                        ImageUtils.draw_Success(mask_rgba)
-                        bleeding_stopped = True
-                        awaiting_click_to_stop_bleeding = False
-                        click_x, click_y = None, None
-                    else:
-                        print("Kliknięto poza raną.")
-                        click_x = None
-                        click_y = None
-
-        # Połączenie nakładki z obrazem
-        blended = ImageUtils.blend_rgba_over_bgr(frame_bgr, mask_rgba)
-
-        # Render SBS VR + fullscreen
-        sbs = create_sbs(blended)
-        cv2.imshow(window_name, sbs)
-
-    cap.release()
-    landmarker.close()
     cv2.destroyAllWindows()
 
-run()
+# ================== MAIN ==================
+def main():
+    # Start RTSP
+    start_rtsp_server(CAM_SIZE[0], CAM_SIZE[1], CAM_FPS)
+
+    # Wątki
+    t1 = threading.Thread(target=capture_thread, daemon=True)
+    t2 = threading.Thread(target=mask_thread,     daemon=True)
+    t3 = threading.Thread(target=display_thread,  daemon=False)
+
+    t1.start()
+    t2.start()
+    t3.start()   # blokuje do zamknięcia okna
+
+if __name__ == "__main__":
+    main()
