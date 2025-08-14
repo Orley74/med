@@ -17,8 +17,8 @@ from gi.repository import Gst, GstRtspServer, GObject
 
 # ================== KONFIG ==================
 # — Kamera —
-CAM_SIZE = (1640, 1232)       # (width, height) libcamera preview
-CAM_FPS  = 30
+CAM_SIZE = (640, 480)       # (width, height) libcamera preview
+CAM_FPS  = 20
 
 # — RTSP —
 RTSP_PORT = 8554
@@ -26,7 +26,7 @@ RTSP_PATH = "/vr"             # rtsp://<host>:8554/vr
 
 # — MediaPipe —
 MODEL_PATH = "pose_landmarker_lite.task"
-ANALYSIS_INTERVAL_MS = 200    # co ile ms liczona jest nowa maska
+ANALYSIS_INTERVAL_MS = 1000    # co ile ms liczona jest nowa maska
 
 # — Render / VR —
 WINDOW_NAME = "VR"
