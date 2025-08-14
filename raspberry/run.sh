@@ -1,5 +1,9 @@
-#!/bin/bash
-cd /home/toor/Desktop/med/med/raspberry
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# Aktywuj venv
 source .venv/bin/activate
 
-python test.py
+# Uruchom aplikację
+exec python3 test.py
